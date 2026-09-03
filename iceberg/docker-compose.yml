@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - /data/iceberg/minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mc:
+    image: minio/mc:latest
+    container_name: mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: -c "mc alias set local http://minio:9000 minioadmin minioadmin; mc mb local/iceberg-bucket || true; mc policy set public local/iceberg-bucket || true; exit 0"
+
+  nessie:
+    image: projectnessie/nessie:latest
+    container_name: nessie
+    hostname: nessie
+    ports:
+      - "19120:19120"
+    environment:
+      NESSIE_VERSION_STORE_TYPE: IN_MEMORY
+      QUARKUS_HTTP_PORT: 19120
+    depends_on:
+      - mc
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    hostname: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - /data/iceberg/trino/catalog:/etc/trino/catalog:ro
+    depends_on:
+      - nessie
+      - minio

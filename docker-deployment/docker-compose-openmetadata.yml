@@ -1,0 +1,187 @@
+volumes:
+  mysql-data:
+    driver: local
+  es-data:
+    driver: local
+
+networks:
+  openmetadata:
+    driver: bridge
+
+services:
+  mysql:
+    container_name: openmetadata-mysql
+    image: openmetadata/db:1.13.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_USER: openmetadata_user
+      MYSQL_PASSWORD: openmetadata_password
+      MYSQL_DATABASE: openmetadata_db
+    expose:
+      - 3306
+    volumes:
+      - /opt/openmetadata/mysql-data:/var/lib/mysql
+    networks:
+      - openmetadata
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  elasticsearch:
+    container_name: openmetadata-elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.0
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    expose:
+      - 9200
+    volumes:
+      - /opt/openmetadata/es-data:/usr/share/elasticsearch/data
+    networks:
+      - openmetadata
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  execute-migrate-all:
+    container_name: openmetadata-execute-migrate-all
+    image: openmetadata/server:1.13.0
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      LOG_LEVEL: INFO
+      OPENMETADATA_CLUSTER_NAME: openmetadata
+      SERVER_PORT: 8585
+      SERVER_ADMIN_PORT: 8586
+      SERVER_HOST_API_URL: http://openmetadata-server:8585/api
+      DB_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      DB_SCHEME: mysql
+      DB_PARAMS: "useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
+      DB_USER: openmetadata_user
+      DB_PASSWORD: openmetadata_password
+      DB_HOST: openmetadata-mysql
+      DB_PORT: "3306"
+      OM_DATABASE: openmetadata_db
+      ELASTICSEARCH_HOST: openmetadata-elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+      ELASTICSEARCH_USER: ""
+      ELASTICSEARCH_PASSWORD: ""
+      AUTHORIZER_CLASS_NAME: org.openmetadata.service.security.DefaultAuthorizer
+      AUTHORIZER_REQUEST_FILTER: org.openmetadata.service.security.JwtFilter
+      AUTHORIZER_ADMIN_PRINCIPALS: '[admin]'
+      AUTHORIZER_ALLOWED_DOMAINS: '[]'
+      AUTHENTICATION_PROVIDER: basic
+      AUTHENTICATION_PUBLIC_KEYS: '[http://openmetadata-server:8585/api/v1/system/config/jwks]'
+      AUTHENTICATION_AUTHORITY: https://accounts.google.com
+      AUTHENTICATION_CLIENT_ID: ''
+      AUTHENTICATION_CALLBACK_URL: ''
+      AUTHENTICATION_JWT_PRINCIPAL_CLAIMS: '[email,preferred_username,sub]'
+      AUTHENTICATION_ENABLE_SELF_SIGNUP: "true"
+      RSA_PUBLIC_KEY_FILE_PATH: "/opt/openmetadata/conf/public_key.der"
+      RSA_PRIVATE_KEY_FILE_PATH: "/opt/openmetadata/conf/private_key.der"
+      JWT_ISSUER: open-metadata.org
+      JWT_KEY_ID: "Gb389a-9f76-g-3hf1-2f4dj171bf9"
+      PIPELINE_SERVICE_CLIENT_ENDPOINT: http://openmetadata-ingestion:8080
+      AIRFLOW_USERNAME: admin
+      AIRFLOW_PASSWORD: admin
+    networks:
+      - openmetadata
+
+  openmetadata-server:
+    container_name: openmetadata-server
+    image: openmetadata/server:1.13.0
+    restart: always
+    depends_on:
+      execute-migrate-all:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      LOG_LEVEL: INFO
+      OPENMETADATA_CLUSTER_NAME: openmetadata
+      SERVER_PORT: 8585
+      SERVER_ADMIN_PORT: 8586
+      SERVER_HOST_API_URL: http://openmetadata-server:8585/api
+      DB_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      DB_SCHEME: mysql
+      DB_PARAMS: "useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
+      DB_USER: openmetadata_user
+      DB_PASSWORD: openmetadata_password
+      DB_HOST: openmetadata-mysql
+      DB_PORT: "3306"
+      OM_DATABASE: openmetadata_db
+      ELASTICSEARCH_HOST: openmetadata-elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+      ELASTICSEARCH_USER: ""
+      ELASTICSEARCH_PASSWORD: ""
+      AUTHORIZER_CLASS_NAME: org.openmetadata.service.security.DefaultAuthorizer
+      AUTHORIZER_REQUEST_FILTER: org.openmetadata.service.security.JwtFilter
+      AUTHORIZER_ADMIN_PRINCIPALS: '[admin]'
+      AUTHORIZER_ALLOWED_DOMAINS: '[]'
+      AUTHENTICATION_PROVIDER: basic
+      AUTHENTICATION_PUBLIC_KEYS: '[http://openmetadata-server:8585/api/v1/system/config/jwks]'
+      AUTHENTICATION_AUTHORITY: https://accounts.google.com
+      AUTHENTICATION_CLIENT_ID: ''
+      AUTHENTICATION_CALLBACK_URL: ''
+      AUTHENTICATION_JWT_PRINCIPAL_CLAIMS: '[email,preferred_username,sub]'
+      AUTHENTICATION_ENABLE_SELF_SIGNUP: "true"
+      RSA_PUBLIC_KEY_FILE_PATH: "/opt/openmetadata/conf/public_key.der"
+      RSA_PRIVATE_KEY_FILE_PATH: "/opt/openmetadata/conf/private_key.der"
+      JWT_ISSUER: open-metadata.org
+      JWT_KEY_ID: "Gb389a-9f76-g-3hf1-2f4dj171bf9"
+      PIPELINE_SERVICE_CLIENT_ENDPOINT: http://openmetadata-ingestion:8080
+      AIRFLOW_USERNAME: admin
+      AIRFLOW_PASSWORD: admin
+    ports:
+      - "8587:8585"
+    networks:
+      - openmetadata
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8585/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  ingestion:
+    container_name: openmetadata-ingestion
+    image: openmetadata/ingestion:1.13.0
+    restart: always
+    depends_on:
+      openmetadata-server:
+        condition: service_healthy
+    environment:
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.default"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      DB_HOST: openmetadata-mysql
+      DB_PORT: "3306"
+      AIRFLOW_DB: airflow_db
+      DB_SCHEME: mysql
+      DB_USER: openmetadata_user
+      DB_PASSWORD: openmetadata_password
+      SERVER_HOST_API_URL: http://openmetadata-server:8585/api
+      OPENMETADATA_SERVER_URL: http://openmetadata-server:8585/api
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    ports:
+      - "8082:8080"
+    networks:
+      - openmetadata
+    command: >
+      airflow standalone

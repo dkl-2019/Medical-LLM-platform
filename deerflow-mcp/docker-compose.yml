@@ -1,0 +1,134 @@
+# MCP servers for DeerFlow: MySQL / PostgreSQL / SeaTunnel
+# All upstream services are reachable on the host 10.131.102.145.
+
+services:
+  mcp-mysql:
+    build: .
+    container_name: deerflow-mcp-mysql
+    command: ["python", "db_mcp.py"]
+    environment:
+      DB_TYPE: mysql
+      PORT: "9101"
+      DB_HOST: 10.131.102.145
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: CHANGE_ME_mysql
+      ALLOW_WRITE: "true"
+    ports:
+      - "9101:9101"
+    restart: unless-stopped
+
+  mcp-pg:
+    build: .
+    container_name: deerflow-mcp-pg
+    command: ["python", "db_mcp.py"]
+    environment:
+      DB_TYPE: pg
+      PORT: "9102"
+      DB_HOST: 10.131.102.145
+      DB_PORT: "5433"
+      DB_USER: omop
+      DB_PASSWORD: CHANGE_ME_pg_omop
+      DB_NAME: omop
+      ALLOW_WRITE: "true"
+    ports:
+      - "9102:9102"
+    restart: unless-stopped
+
+  mcp-minio:
+    build: .
+    container_name: deerflow-mcp-minio
+    command: ["python", "minio_mcp.py"]
+    environment:
+      PORT: "9104"
+      MINIO_ENDPOINT: 10.131.102.145:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: CHANGE_ME_minio
+    ports:
+      - "9104:9104"
+    restart: unless-stopped
+
+  mcp-openmetadata:
+    build: .
+    container_name: deerflow-mcp-openmetadata
+    command: ["python", "openmetadata_mcp.py"]
+    environment:
+      PORT: "9105"
+      OM_URL: http://10.131.102.144:8585
+      OM_USERNAME: admin@open-metadata.org
+      OM_PASSWORD: admin
+    ports:
+      - "9105:9105"
+    restart: unless-stopped
+
+  mcp-trino:
+    build: .
+    container_name: deerflow-mcp-trino
+    command: ["python", "db_mcp.py"]
+    environment:
+      DB_TYPE: trino
+      PORT: "9106"
+      TRINO_HOST: 10.131.102.144
+      TRINO_PORT: "8080"
+      TRINO_USER: admin
+      ALLOW_WRITE: "false"
+    ports:
+      - "9106:9106"
+    restart: unless-stopped
+
+  mcp-hive:
+    build: .
+    container_name: deerflow-mcp-hive
+    command: ["python", "db_mcp.py"]
+    environment:
+      DB_TYPE: hive
+      PORT: "9107"
+      HIVE_HOST: 10.131.102.144
+      HIVE_PORT: "30000"
+      HIVE_AUTH: PLAIN
+      HIVE_USER: admin
+      ALLOW_WRITE: "true"
+    ports:
+      - "9107:9107"
+    restart: unless-stopped
+
+  mcp-doris:
+    build: .
+    container_name: deerflow-mcp-doris
+    command: ["python", "db_mcp.py"]
+    environment:
+      DB_TYPE: mysql
+      PORT: "9108"
+      DB_HOST: 10.131.102.145
+      DB_PORT: "9030"
+      DB_USER: root
+      DB_PASSWORD: ""
+      ALLOW_WRITE: "true"
+    ports:
+      - "9108:9108"
+    restart: unless-stopped
+
+  mcp-seatunnel:
+    build: .
+    container_name: deerflow-mcp-seatunnel
+    command: ["python", "seatunnel_mcp.py"]
+    environment:
+      PORT: "9103"
+      SEATUNNEL_URL: http://10.131.102.145:8080
+      MYSQL_PASSWORD: CHANGE_ME_mysql
+      PG_PASSWORD: CHANGE_ME_pg_omop
+    ports:
+      - "9103:9103"
+    restart: unless-stopped
+
+  mcp-dagster:
+    build: .
+    container_name: deerflow-mcp-dagster
+    command: ["python", "dagster_mcp.py"]
+    environment:
+      PORT: "9109"
+      DAGSTER_URL: http://10.131.102.145:3000/graphql
+      DAGSTER_LOCATION: medgov
+    ports:
+      - "9109:9109"
+    restart: unless-stopped
