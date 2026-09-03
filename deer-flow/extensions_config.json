@@ -1,0 +1,59 @@
+{
+  "mcpServers": {
+    "mysql": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9101/mcp",
+      "description": "MySQL 8 on 145:3306 (databases: his_demo, test). Tools: list_databases/list_tables/describe_table/read_query/execute_sql"
+    },
+    "postgres": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9102/mcp",
+      "description": "PostgreSQL pg-omop on 145:5433 (db: omop, schema omop). Tools: list_databases/list_tables/describe_table/read_query/execute_sql"
+    },
+    "seatunnel": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9103/mcp",
+      "description": "Apache SeaTunnel 2.3.13 on 145:8080. Tools: submit_job/stop_job/list_running_jobs/list_finished_jobs/get_job_info/cluster_monitoring. Use for data sync (passwords auto-injected, use '...' placeholder)"
+    },
+    "minio": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9104/mcp",
+      "description": "MinIO S3 object storage on 145:9000 (buckets: iceberg, lake). Tools: list_buckets/list_objects/read_text_object/put_text_object/delete_object/presigned_url"
+    },
+    "openmetadata": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9105/mcp",
+      "description": "OpenMetadata data governance on 144:8585. Tools: search_metadata/get_table_details/get_lineage/list_database_services/list_tables. Use for metadata, table schemas, column descriptions, data lineage"
+    },
+    "trino": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9106/mcp",
+      "description": "Trino federated query engine on 144:8080 (catalogs: iceberg, system). Read-only. Tools: list_databases(list catalogs)/list_tables(cat.schema)/describe_table/read_query. Use for cross-source SQL and Iceberg lake queries"
+    },
+    "hive": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9107/mcp",
+      "description": "HiveServer2 on 144:30000 (databases: default, omopdb, testdb). Tools: list_databases/list_tables/describe_table/read_query/execute_sql"
+    },
+    "doris": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9108/mcp",
+      "description": "Doris FE MySQL protocol on 145:9030 (root no password, database omopdb). Note: Doris BE is down on this VM (AVX2 missing) - DDL/listing work but table queries may fail. Tools: list_databases/list_tables/describe_table/read_query/execute_sql"
+    },
+    "dagster": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://10.131.102.145:9109/mcp",
+      "description": "Dagster 1.13.12 orchestrator on 145:3000 (medgov code location). Tools: dagster_overview/list_assets/list_runs/get_run_details/materialize_assets/launch_job/terminate_run/reload_workspace. Use materialize_assets to trigger asset materialization, get_run_details to track run status."
+    }
+  },
+  "skills": {}
+}

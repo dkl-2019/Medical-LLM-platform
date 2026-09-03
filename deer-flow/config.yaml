@@ -1,0 +1,59 @@
+# DeerFlow Configuration
+# Minimal config generated for 145 deployment
+# Full reference: config.example.yaml
+config_version: 33
+log_level: info
+
+models:
+  - name: qwen3-80b-a3b
+    display_name: Qwen3-80B-A3B
+    use: langchain_openai:ChatOpenAI
+    model: Qwen3-80B-A3B
+    base_url: http://10.131.102.25:9000/v1
+    api_key: "EMPTY"
+    request_timeout: 600.0
+    max_retries: 2
+    max_tokens: 4096
+    temperature: 0.7
+
+  - name: glm-5.2
+    display_name: glm-5.2
+    use: langchain_openai:ChatOpenAI
+    model: glm-5.2
+    base_url: https://ark.cn-beijing.volces.com/api/plan/v3
+    api_key: $VOLCENGINE_API_KEY
+    request_timeout: 600.0
+    max_retries: 2
+    max_tokens: 4096
+    temperature: 0.7
+
+tools:
+  - name: image_search
+    use: deerflow.community.image_search.tools:image_search_tool
+    group: web
+    max_results: 5
+  - name: ls
+    use: deerflow.sandbox.tools:ls_tool
+    group: file:read
+  - name: read_file
+    use: deerflow.sandbox.tools:read_file_tool
+    group: file:read
+  - name: glob
+    use: deerflow.sandbox.tools:glob_tool
+    group: file:read
+  - name: grep
+    use: deerflow.sandbox.tools:grep_tool
+    group: file:read
+  - name: write_file
+    use: deerflow.sandbox.tools:write_file_tool
+    group: file:write
+  - name: str_replace
+    use: deerflow.sandbox.tools:str_replace_tool
+    group: file:write
+  - name: bash
+    use: deerflow.sandbox.tools:bash_tool
+    group: bash
+
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+  allow_host_bash: false
