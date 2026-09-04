@@ -1,0 +1,237 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hive
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-config
+  namespace: hive
+data:
+  core-site.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <property>
+        <name>fs.defaultFS</name>
+        <value>hdfs://hadoop-master.hadoop.svc.cluster.local:8020</value>
+      </property>
+    </configuration>
+  hdfs-site.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <property>
+        <name>dfs.replication</name>
+        <value>2</value>
+      </property>
+    </configuration>
+  hive-site.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:mysql://10.131.102.144:3306/hive_metastore?createDatabaseIfNotExist=true&amp;useSSL=false&amp;allowPublicKeyRetrieval=true</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>com.mysql.cj.jdbc.Driver</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>root</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>openmetadata_password</value>
+      </property>
+      <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>/user/hive/warehouse</value>
+      </property>
+      <property>
+        <name>hive.server2.thrift.bind.host</name>
+        <value>0.0.0.0</value>
+      </property>
+      <property>
+        <name>hive.server2.thrift.port</name>
+        <value>10000</value>
+      </property>
+      <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://localhost:9083</value>
+      </property>
+      <property>
+        <name>hive.metastore.event.db.notification.api.auth</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>hive.server2.active.passive.ha.enable</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>hive.support.concurrency</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>hive.txn.manager</name>
+        <value>org.apache.hadoop.hive.ql.lockmgr.DummyTxnManager</value>
+      </property>
+      <property>
+        <name>hive.compactor.initiator.on</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>hive.compactor.worker.threads</name>
+        <value>0</value>
+      </property>
+      <property>
+        <name>hive.exec.scratchdir</name>
+        <value>/tmp/hive</value>
+      </property>
+      <property>
+        <name>hive.server2.enable.doAs</name>
+        <value>false</value>
+      </property>
+      <property>
+        <name>hive.server2.authentication</name>
+        <value>NONE</value>
+      </property>
+    </configuration>
+  start-hive.sh: |
+    #!/bin/bash
+    set -e
+
+    export HIVE_HOME=/opt/hive
+    export HADOOP_HOME=/opt/hadoop
+    export HADOOP_CONF_DIR=/opt/hive/conf
+    export HADOOP_HEAPSIZE=1024
+    export HADOOP_USER_NAME=hadoop
+    export PATH=$PATH:$HIVE_HOME/bin:$HADOOP_HOME/bin
+
+    # 安装 which 命令
+    printf '#!/bin/bash\ntype -P "$1"\n' > /usr/bin/which
+    chmod +x /usr/bin/which
+
+    # 链接 Hive
+    ln -sf /opt/hive-cache/hive /opt/hive
+
+    # 修复 guava 冲突
+    cp /opt/hadoop/share/hadoop/common/lib/guava-27.0-jre.jar /opt/hive/lib/ 2>/dev/null || true
+    rm -f /opt/hive/lib/guava-19.0.jar
+    # 恢复 slf4j-reload4j（如果被删除了）
+    test -f /opt/hadoop/share/hadoop/common/lib/slf4j-reload4j-1.7.36.jar || cp /opt/hive/lib/slf4j-reload4j-1.7.36.jar /opt/hadoop/share/hadoop/common/lib/ 2>/dev/null || true
+
+    # 创建 log4j 配置
+    cp /opt/hive/conf/hive-log4j2.properties.template /opt/hive/conf/hive-log4j2.properties 2>/dev/null || true
+    cp /opt/hadoop/etc/hadoop/log4j.properties /opt/hive/conf/ 2>/dev/null || true
+
+    # 拷贝配置文件
+    cp /opt/hive-config/core-site.xml /opt/hive/conf/
+    cp /opt/hive-config/hdfs-site.xml /opt/hive/conf/
+    cp /opt/hive-config/hive-site.xml /opt/hive/conf/
+    cp /opt/hive-config/core-site.xml /opt/hadoop/etc/hadoop/
+    cp /opt/hive-config/hdfs-site.xml /opt/hadoop/etc/hadoop/
+
+    # 创建 HDFS 目录
+    hdfs dfs -mkdir -p /user/hive/warehouse /tmp 2>/dev/null || true
+    hdfs dfs -chmod g+w /user/hive/warehouse /tmp 2>/dev/null || true
+
+    # 初始化 Metastore schema
+    if [ ! -f /opt/hive-cache/.initialized ]; then
+      echo "Initializing Metastore schema..."
+      $HIVE_HOME/bin/schematool -dbType mysql -initSchema || true
+      touch /opt/hive-cache/.initialized
+    fi
+
+    # 启动 Metastore
+    echo "Starting Hive Metastore..."
+    $HIVE_HOME/bin/hive --service metastore > /opt/hive-cache/metastore.log 2>&1 &
+    sleep 20
+
+    # 启动 HiveServer2
+    echo "Starting HiveServer2..."
+    $HIVE_HOME/bin/hive --service hiveserver2 --hiveconf hive.log.level=DEBUG > /opt/hive-cache/hiveserver2.log 2>&1 &
+
+    # 等待 HiveServer2 启动
+    for i in $(seq 1 60); do
+      if timeout 2 bash -c "exec 3<>/dev/tcp/localhost/10000" 2>/dev/null; then
+        echo "HiveServer2 is ready on port 10000"
+        break
+      fi
+      sleep 5
+    done
+
+    tail -f /dev/null
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-server
+  namespace: hive
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-server
+  template:
+    metadata:
+      labels:
+        app: hive-server
+    spec:
+      nodeName: ubuntn144
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: hive
+          image: apache/hadoop:3.3.6
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args: ["/opt/hive-config/start-hive.sh"]
+          ports:
+            - containerPort: 9083
+            - containerPort: 10000
+            - containerPort: 10002
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: hive-config
+              mountPath: /opt/hive-config
+            - name: hive-cache
+              mountPath: /opt/hive-cache
+      volumes:
+        - name: hive-config
+          configMap:
+            name: hive-config
+            defaultMode: 0755
+        - name: hive-cache
+          hostPath:
+            path: /data/hive-cache
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-service
+  namespace: hive
+spec:
+  type: NodePort
+  ports:
+    - port: 9083
+      targetPort: 9083
+      nodePort: 30083
+      name: metastore
+    - port: 10000
+      targetPort: 10000
+      nodePort: 30000
+      name: hiveserver2
+    - port: 10002
+      targetPort: 10002
+      nodePort: 30002
+      name: hiveserver2-ui
+  selector:
+    app: hive-server

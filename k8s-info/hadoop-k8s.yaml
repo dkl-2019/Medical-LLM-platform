@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hadoop
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hadoop-master
+  namespace: hadoop
+spec:
+  serviceName: hadoop-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hadoop-master
+  template:
+    metadata:
+      labels:
+        app: hadoop-master
+    spec:
+      nodeName: ubuntn144
+      containers:
+        - name: hadoop-master
+          image: apache/hadoop:3.3.6
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              if [ ! -d /data/hadoop/hdfs/namenode/current ]; then
+                hdfs namenode -format -force -nonInteractive
+              fi
+              hdfs --daemon start namenode
+              yarn --daemon start resourcemanager
+              tail -f /dev/null
+          ports:
+            - containerPort: 8020
+            - containerPort: 9870
+            - containerPort: 8088
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/core-site.xml
+              subPath: core-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/hdfs-site.xml
+              subPath: hdfs-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/yarn-site.xml
+              subPath: yarn-site.xml
+            - name: data
+              mountPath: /data/hadoop
+      volumes:
+        - name: hadoop-config
+          configMap:
+            name: hadoop-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: local-storage
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hadoop-master
+  namespace: hadoop
+spec:
+  type: NodePort
+  ports:
+    - port: 8020
+      targetPort: 8020
+      nodePort: 30820
+      name: hdfs
+    - port: 9870
+      targetPort: 9870
+      nodePort: 30870
+      name: namenode-ui
+    - port: 8088
+      targetPort: 8088
+      nodePort: 30888
+      name: rm-ui
+  selector:
+    app: hadoop-master
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hadoop-worker
+  namespace: hadoop
+spec:
+  serviceName: hadoop-worker
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hadoop-worker
+  template:
+    metadata:
+      labels:
+        app: hadoop-worker
+    spec:
+      containers:
+        - name: hadoop-worker
+          image: apache/hadoop:3.3.6
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              until nc -z hadoop-master-0.hadoop-master.hadoop.svc.cluster.local 8020; do
+                echo "waiting for hadoop master..."
+                sleep 5
+              done
+              hdfs datanode &
+              yarn --daemon start nodemanager
+              wait
+          ports:
+            - containerPort: 9864
+            - containerPort: 8042
+          resources:
+            requests:
+              cpu: "0.5"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/core-site.xml
+              subPath: core-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/hdfs-site.xml
+              subPath: hdfs-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/yarn-site.xml
+              subPath: yarn-site.xml
+            - name: data
+              mountPath: /data/hadoop
+      volumes:
+        - name: hadoop-config
+          configMap:
+            name: hadoop-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: local-storage
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hadoop-worker
+  namespace: hadoop
+spec:
+  clusterIP: None
+  selector:
+    app: hadoop-worker

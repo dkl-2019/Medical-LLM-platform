@@ -202,6 +202,7 @@ docker-compose.yml    9 个服务，端口 9101-9109
 |------|------|
 | [deerflow-mcp-datasync.md](deerflow-mcp-datasync.md) | **主力开发记录**：MCP 开发全过程、E2E 验证、Hive 同步排障（附录二）、Dagster 接入（附录三） |
 | [144_145环境信息.md](144_145环境信息.md) | 服务器环境、账号、访问方式 |
+| [k8s-info/](k8s-info/) | 144 K8s 集群部署清单（Hadoop/Hive/Spark/Flink yaml 平铺 + 环境总览） |
 | [大模型数据治理平台-共享信息.md](大模型数据治理平台-共享信息.md) | 共享凭据（密码占位符的真实值见此） |
 | [《AI Native 医疗数据治理平台（OMOP CDM）架构与需求规格书》.md](《AI Native 医疗数据治理平台（OMOP CDM）架构与需求规格书》.md) | 平台需求规格 |
 | [docker-deployment/](docker-deployment/) | medgov 平台 compose 部署文件与说明 |

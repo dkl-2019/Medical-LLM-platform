@@ -1,0 +1,153 @@
+# Flink 1.20 Session 集群部署
+# 架构：JobManager 部署在 144（ubuntn144），TaskManager 分别部署在 144 和 145
+# Web UI：http://10.131.102.144:32181
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flink
+---
+# Flink JobManager：作业管理器，负责调度与 Checkpoint 协调
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: flink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink-jobmanager
+    spec:
+      # 固定调度到 144 主节点
+      nodeSelector:
+        kubernetes.io/hostname: ubuntn144
+      containers:
+        - name: jobmanager
+          image: docker.io/library/flink:1.20
+          imagePullPolicy: IfNotPresent
+          args: ["jobmanager"]
+          ports:
+            - containerPort: 6123   # RPC 通信端口
+            - containerPort: 6124   # Blob 端口（分发 jar 包）
+            - containerPort: 6125   # Queryable State 端口
+            - containerPort: 8081   # Web UI / REST 端口
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager.flink.svc.cluster.local
+                rest.bind-address: 0.0.0.0
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+---
+# JobManager Service：
+# - 6123/6124 走 ClusterIP，TaskManager 通过集群内 DNS 连接
+# - 8081 Web UI 走 NodePort 32181，供外部浏览器访问
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: flink
+spec:
+  type: NodePort
+  selector:
+    app: flink-jobmanager
+  ports:
+    - name: rpc
+      port: 6123
+      targetPort: 6123
+    - name: blob
+      port: 6124
+      targetPort: 6124
+    - name: query
+      port: 6125
+      targetPort: 6125
+    - name: ui
+      port: 8081
+      targetPort: 8081
+      nodePort: 32181
+---
+# TaskManager 1：部署在 144
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager-144
+  namespace: flink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-taskmanager-144
+  template:
+    metadata:
+      labels:
+        app: flink-taskmanager-144
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ubuntn144
+      containers:
+        - name: taskmanager
+          image: docker.io/library/flink:1.20
+          imagePullPolicy: IfNotPresent
+          args: ["taskmanager"]
+          ports:
+            - containerPort: 6122   # TaskManager 数据端口
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager.flink.svc.cluster.local
+                taskmanager.bind-host: 0.0.0.0
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+---
+# TaskManager 2：部署在 145
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager-145
+  namespace: flink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-taskmanager-145
+  template:
+    metadata:
+      labels:
+        app: flink-taskmanager-145
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ubuntn145
+      containers:
+        - name: taskmanager
+          image: docker.io/library/flink:1.20
+          imagePullPolicy: IfNotPresent
+          args: ["taskmanager"]
+          ports:
+            - containerPort: 6122
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager.flink.svc.cluster.local
+                taskmanager.bind-host: 0.0.0.0
+          resources:
+            limits:
+              cpu: "4"
+              memory: 8Gi
+            requests:
+              cpu: "500m"
+              memory: 1Gi

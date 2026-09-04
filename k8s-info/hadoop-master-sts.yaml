@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hadoop-master
+  namespace: hadoop
+spec:
+  serviceName: hadoop-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hadoop-master
+  template:
+    metadata:
+      labels:
+        app: hadoop-master
+    spec:
+      nodeName: ubuntn144
+      containers:
+        - name: hadoop-master
+          image: apache/hadoop:3.3.6
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              if [ ! -d /data/hadoop/hdfs/namenode/current ]; then
+                hdfs namenode -format -force -nonInteractive
+              fi
+              hdfs --daemon start namenode
+              yarn --daemon start resourcemanager
+              tail -f /dev/null
+          ports:
+            - containerPort: 8020
+            - containerPort: 9870
+            - containerPort: 8088
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/core-site.xml
+              subPath: core-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/hdfs-site.xml
+              subPath: hdfs-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/etc/hadoop/yarn-site.xml
+              subPath: yarn-site.xml
+            - name: data
+              mountPath: /data/hadoop
+      volumes:
+        - name: hadoop-config
+          configMap:
+            name: hadoop-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-hadoop-master-0
