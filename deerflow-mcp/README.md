@@ -60,9 +60,65 @@ README.md             本文件
 比 stdio 好部署好监控);DeerFlow 侧走 `langchain-mcp-adapters`,
 `extensions_config.json` 填 `{"type": "http", "url": "http://10.131.102.145:91xx/mcp"}` 即接入。
 
-## 3. 新增 MCP 工具/服务指南(后续开发看这里)
+## 3. Docker 部署模型(一个镜像,十二个容器)
 
-### 3.1 新增一个工具(改现有 py 文件)
+所有 MCP 服务**共用同一个 Docker 镜像**,由 `docker-compose.yml` 通过不同的
+`command`(入口 python 脚本)+ `environment`(端口、目标组件地址、凭证)
+派生成 12 个独立容器:
+
+```
+镜像 deerflow-mcp-mcp (python:3.12-slim + requirements.txt)
+  ├─ container: deerflow-mcp-mysql        command: python db_mcp.py          PORT=9101  DB_TYPE=mysql
+  ├─ container: deerflow-mcp-pg           command: python db_mcp.py          PORT=9102  DB_TYPE=pg
+  ├─ container: deerflow-mcp-seatunnel    command: python seatunnel_mcp.py   PORT=9103
+  ├─ container: deerflow-mcp-minio        command: python minio_mcp.py       PORT=9104
+  ├─ container: deerflow-mcp-openmetadata command: python openmetadata_mcp.py PORT=9105
+  ├─ container: deerflow-mcp-trino        command: python db_mcp.py          PORT=9106  DB_TYPE=trino
+  ├─ container: deerflow-mcp-hive         command: python db_mcp.py          PORT=9107  DB_TYPE=hive
+  ├─ container: deerflow-mcp-doris        command: python db_mcp.py          PORT=9108  DB_TYPE=mysql(走 9030)
+  ├─ container: deerflow-mcp-dagster      command: python dagster_mcp.py     PORT=9109
+  ├─ container: deerflow-mcp-spark        command: python spark_mcp.py       PORT=9110
+  ├─ container: deerflow-mcp-flink        command: python flink_mcp.py       PORT=9111
+  └─ container: deerflow-mcp-hadoop       command: python hadoop_mcp.py      PORT=9112
+```
+
+**为什么不拆 12 个镜像?** MCP 服务代码高度同构(都是 FastMCP + httpx 封装 REST/JDBC),
+共享镜像只需装一次依赖、改代码统一重建,运维成本低;隔离性靠"一容器一服务一端口"保证。
+
+### 3.1 镜像分层与缓存
+
+```
+FROM python:3.12-slim
+  ├─ 层1: ENV PIP_INDEX_URL=清华源(离线内网必须)
+  ├─ 层2: COPY requirements.txt + pip install   ← 依赖不变则命中缓存,秒过
+  └─ 层3: COPY *_mcp.py                          ← 改任何 py 都重建此层
+```
+
+日常改代码只动层3,构建很快;升级依赖才动层2。
+
+### 3.2 服务 ↔ 环境变量 ↔ 目标组件对照表
+
+| compose 服务 | 端口 | 关键环境变量 | 目标组件 |
+|-------------|------|-------------|---------|
+| mcp-mysql | 9101 | DB_TYPE=mysql, DB_HOST/PORT/USER/PASSWORD | MySQL 145:3306 |
+| mcp-pg | 9102 | DB_TYPE=pg, DB_HOST/PORT/USER/PASSWORD, DB_NAME=omop | PostgreSQL 145:5433 |
+| mcp-seatunnel | 9103 | SEATUNNEL_URL, MYSQL_PASSWORD, PG_PASSWORD(占位符注入用) | SeaTunnel 145:8080 |
+| mcp-minio | 9104 | MINIO_ENDPOINT/ACCESS_KEY/SECRET_KEY | MinIO 145:9000 |
+| mcp-openmetadata | 9105 | OM_URL/USERNAME/PASSWORD(登录后缓存 JWT) | OpenMetadata 144:8585 |
+| mcp-trino | 9106 | DB_TYPE=trino, TRINO_HOST/PORT/USER, ALLOW_WRITE=false | Trino 144:8080 |
+| mcp-hive | 9107 | DB_TYPE=hive, HIVE_HOST/PORT/AUTH/USER | HiveServer2 144:30000 |
+| mcp-doris | 9108 | DB_TYPE=mysql, DB_HOST=145, DB_PORT=9030 | Doris FE(MySQL 协议) |
+| mcp-dagster | 9109 | DAGSTER_URL(graphql), DAGSTER_LOCATION=medgov | Dagster 145:3000 |
+| mcp-spark | 9110 | SPARK_MASTER_URL | Spark Master REST 144:32080 |
+| mcp-flink | 9111 | FLINK_REST_URL | Flink JobManager 144:32181 |
+| mcp-hadoop | 9112 | HADOOP_NN_URL(JMX+WebHDFS), YARN_RM_URL | NameNode :30870 / RM :30888 |
+
+> 凭据原则:真实密码只存在于容器环境变量(compose 里为 CHANGE_ME 占位,
+> 145 上是真实值);代码与 Git 仓库不落真实密钥。
+
+## 4. 新增 MCP 工具/服务指南(后续开发看这里)
+
+### 4.1 新增一个工具(改现有 py 文件)
 
 1. 在对应 `*_mcp.py` 里加函数,docstring 用**中文**写清用途、参数、安全要求
    (工具描述会快照进模型上下文,是 Agent 正确使用的关键)
@@ -71,17 +127,20 @@ README.md             本文件
 4. DeerFlow **新开对话**测试(工具描述按会话快照,旧会话看不到新工具)
 5. 更新本 README 的服务总览表
 
-### 3.2 新增一个 MCP 服务(完整清单)
+### 4.2 新增一个 MCP 服务(完整清单)
 
-1. 写 `xxx_mcp.py`,开头环境变量约定:`PORT`(默认分配下一个 9110+)+ 各连接参数
-2. Dockerfile 的 COPY 行加上新文件;docker-compose.yml 加服务(参考 mcp-dagster)
-3. 145 上同步代码后 `docker compose up -d --build <新服务>`
-4. `/data/deer-flow/extensions_config.json` 加注册项(**原地写** `cat >`,不要 `sed -i`/`mv`
+1. 写 `xxx_mcp.py`,开头环境变量约定:`PORT`(默认分配下一个 9112+)+ 各连接参数
+2. Dockerfile 的 COPY 行加上新文件;docker-compose.yml 加服务(参考 mcp-hadoop)
+3. 同步到 145:`scp` 到 `/tmp` 中转再 `sudo cp` 进 `/data/deerflow-mcp`
+   (目录 root 属主,直接 scp 会 Permission denied),然后
+   `cd /data/deerflow-mcp && sudo docker compose up -d --build <新服务>`
+4. MCP 协议自检(工具发现 + 实调,见第 8 节)
+5. `/data/deer-flow/extensions_config.json` 加注册项(**原地写** `cat >`,不要 `sed -i`/`mv`
    ——单文件 bind mount 会因 inode 变化导致容器内看不到新内容)
-5. `docker restart deer-flow-gateway`,新开对话验证工具发现
-6. 更新本 README(服务总览表 + 架构图)
+6. `docker restart deer-flow-gateway`,新开对话验证工具发现
+7. 更新本 README(服务总览表 + 架构图),本地 git 提交推送
 
-### 3.3 开发规范(踩坑沉淀,务必遵守)
+### 4.3 开发规范(踩坑沉淀,务必遵守)
 
 - **注释/docstring 一律中文**,标识符英文
 - **`mcp` 必须锁 `<2.0.0`**:2.0 移除了 `mcp.server.fastmcp` 模块路径,装上即崩
@@ -93,7 +152,7 @@ README.md             本文件
 - **写操作工具描述必须包含确认要求**:execute_sql/stop_job/terminate_run 均要求
   Agent 先向用户展示并获确认
 
-## 4. 安全设计
+## 5. 安全设计
 
 | 机制 | 实现位置 | 说明 |
 |------|---------|------|
@@ -103,9 +162,9 @@ README.md             本文件
 | 写开关 | ALLOW_WRITE env | trino 即以此设为只读 |
 | 结果防爆 | db_common.py | 查询结果截断 200 行 |
 
-## 5. 数据同步(SeaTunnel)——已验证链路与模板
+## 6. 数据同步(SeaTunnel)——已验证链路与模板
 
-### 5.1 REST API(2.3.13 实测,端口 8080)
+### 6.1 REST API(2.3.13 实测,端口 8080)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -117,7 +176,7 @@ README.md             本文件
 
 注意:旧文档的 `/hazelcast/rest/maps/submit-job` 在 2.3.13 已 404。**不需要 CLI,REST 全搞定。**
 
-### 5.2 MySQL → PostgreSQL 模板(自动建表,已验证)
+### 6.2 MySQL → PostgreSQL 模板(自动建表,已验证)
 
 ```json
 {"env": {"job.mode": "BATCH", "parallelism": 1},
@@ -139,7 +198,7 @@ README.md             本文件
 前置(一次性):目标库里 `CREATE SCHEMA IF NOT EXISTS omop;`
 (PG sink 的 `database` 选项同时是 URL 库名和 SQL schema 前缀,必须同名)。
 
-### 5.3 MySQL → Hive 模板(原生 connector,已验证)
+### 6.3 MySQL → Hive 模板(原生 connector,已验证)
 
 ```json
 {"env": {"job.mode": "BATCH", "parallelism": 1},
@@ -161,7 +220,7 @@ README.md             本文件
 - 重复同步为 append 语义;全量重灌先 DROP 重建
 - 服务端已配好 `HADOOP_USER_NAME=hadoop` + extra_hosts(见附录一)
 
-### 5.4 submit_job 的三层防御
+### 6.4 submit_job 的三层防御
 
 1. **格式自动纠正**:JSON 的 source/sink/transform 传对象(HOCON 风格)自动包成数组
 2. **密码自动注入**:占位符(`...`/`***`/`$MYSQL_PASSWORD` 等)按同级 `url` 判断方言,
@@ -169,9 +228,9 @@ README.md             本文件
 3. **工具描述内置规则**:数组格式、PG schema 要求、Hive 同步规则(8-12 条)、
    重复同步先删表、提交前向用户展示配置确认
 
-## 6. 踩坑记录(全部已解决或已规避)
+## 7. 踩坑记录(全部已解决或已规避)
 
-### 6.1 MCP 框架层
+### 7.1 MCP 框架层
 
 | 现象 | 根因 | 解决 |
 |------|------|------|
@@ -179,9 +238,12 @@ README.md             本文件
 | 工具在 DeerFlow 里没有描述、模型不会用 | `.format()`/f-string 的 docstring 不是字面量,`__doc__` 为空 | 显式赋 `fn.__doc__` 再 `mcp.tool()(fn)` |
 | PG `syntax error at or near "$1"` | psycopg3 不支持 `NOT IN %s` 元组展开 | 改 `<> ALL(%s)` + list |
 | DeerFlow 提交作业报参数缺失 | 参数名 `config` 太通用+模型偶发漏传 | 改名 `job_config` + 空参数返回明确错误 |
-| 改了 extensions_config.json 容器里不生效 | sed -i/mv 换了 inode,单文件 bind mount 失联 | 原地写(`cat >`) |
+| 改了 extensions_config.json 容器里不生效 | sed -i/mv 换了 inode,单文件 bind mount 失联 | 原地写(`cat >`),`docker restart deer-flow-gateway` 即可 |
+| gateway 改了 .env 后 restart 不生效 | `docker restart` 不重载 env_file | `cd /data/deer-flow && sudo bash scripts/deploy.sh start` 重建容器(直接 `docker compose up` 会缺 DEER_FLOW_HOME 等插值变量,报 empty section between colons) |
+| 离线内网镜像构建 pip 拉不动 | 无外网 | Dockerfile 里 `PIP_INDEX_URL=清华源` |
+| scp 到 /data/deerflow-mcp 报 Permission denied | 目录 root 属主 | scp 到 `/tmp` 中转再 `sudo cp`;docker 命令都加 sudo |
 
-### 6.2 SeaTunnel 同步
+### 7.2 SeaTunnel 同步
 
 | 现象 | 根因 | 解决 |
 |------|------|------|
@@ -195,7 +257,7 @@ README.md             本文件
 | Create/Finish Time 与服务器差 8 小时 | JVM 默认 UTC | compose 加 `TZ=Asia/Shanghai` |
 | 完成作业隔天消失 | `history-job-expire-minutes` 默认 1440(1 天) | 改 10080(保留 7 天),配置在 145 `config/seatunnel/seatunnel.yaml` |
 
-### 6.3 各组件 API
+### 7.3 各组件 API
 
 | 现象 | 根因 | 解决 |
 |------|------|------|
@@ -206,21 +268,63 @@ README.md             本文件
 | Dagster `PipelineNotFound` | jobName 写成 `__ASSET_JOB__`(双下划线) | 用 `__ASSET_JOB` |
 | Dagster 资产物化无从下手 | ExecutionParams 无 assetSelection 字段 | 靠 `dagster/asset_selection` 标签传递 |
 
-## 7. 运维手册(在 145 上)
+## 8. 运维手册(在 145 上)
 
 ```bash
-# 状态/日志
-docker ps --filter name=deerflow-mcp
-cd /data/deerflow-mcp && docker compose logs -f mcp-seatunnel
+# 状态/日志(目录 root 属主,docker 命令都要 sudo)
+sudo docker ps --format '{{.Names}}\t{{.Ports}}' | grep deerflow-mcp
+cd /data/deerflow-mcp && sudo docker compose logs -f mcp-seatunnel
 
 # MCP 代码更新后(三步,缺一不可)
 cd /data/deerflow-mcp
-docker compose up -d --build          # 重建容器
-docker restart deer-flow-gateway      # 刷新工具缓存
+sudo docker compose up -d --build          # 重建容器
+sudo docker restart deer-flow-gateway      # 刷新工具缓存
 # 然后新开对话测试(工具描述按会话快照)
 
-# 手工自检(不经过 DeerFlow,直接列工具)
-docker exec deerflow-mcp-seatunnel python -c "
+# 只重启单个服务(代码没改)
+sudo docker compose -f /data/deerflow-mcp/docker-compose.yml restart mcp-spark
+
+# 验证 DeerFlow 网关健康
+curl -s -o /dev/null -w "%{http_code}\n" http://10.131.102.145:2026/   # 200 即正常
+
+# SeaTunnel 直查
+curl http://10.131.102.145:8080/finished-jobs
+```
+
+### 8.1 MCP 协议自检(curl 版,不经 DeerFlow 直接调工具)
+
+streamable-http 传输要点:必须带 `Accept: application/json, text/event-stream` 头,
+每次请求携带 `mcp-session-id`,响应是 SSE 格式(取 `data:` 行):
+
+```bash
+# 1. 初始化握手,拿 session id(以 hadoop 9112 为例)
+curl -s -X POST http://10.131.102.145:9112/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+    "protocolVersion":"2024-11-05","capabilities":{},
+    "clientInfo":{"name":"test","version":"1.0"}}}' -D /tmp/h -o /dev/null
+SID=$(grep -i mcp-session-id /tmp/h | awk '{print $2}' | tr -d '\r')
+
+# 2. 发 initialized 通知
+curl -s -X POST http://10.131.102.145:9112/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' -o /dev/null
+
+# 3. 列工具
+curl -s -X POST http://10.131.102.145:9112/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# 4. 实调工具(method=tools/call, name=工具名, arguments={...})
+```
+
+### 8.2 手工自检(python 版,容器内)
+
+```bash
+sudo docker exec deerflow-mcp-seatunnel python -c "
 import asyncio
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -230,9 +334,6 @@ async def m():
             await s.initialize()
             print([t.name for t in (await s.list_tools()).tools])
 asyncio.run(m())"
-
-# SeaTunnel 直查
-curl http://10.131.102.145:8080/finished-jobs
 ```
 
 对话测试提示词(已验证):
@@ -244,7 +345,7 @@ curl http://10.131.102.145:8080/finished-jobs
 Agent 自动执行:describe MySQL 表 → 生成作业配置(占位密码)→ 展示确认 →
 submit_job → 轮询状态 → postgres read_query 校验行数。
 
-## 8. 已知限制与后续方向
+## 9. 已知限制与后续方向
 
 **限制:**
 1. 重复同步同一张已存在 PG 目标表会撞 SeaTunnel catalog bug(规避:先 DROP)
@@ -344,6 +445,25 @@ MCP 协议级端到端验证通过**(工具发现 + overview 实调返回集群�
 - Spark submit_app 的 jar 是**拉取式**(Master/Worker 自己去拉),放 HDFS 或
   MinIO presigned URL 均可
 
+## 附录四:凭证(内网测试环境,真实值见 145 容器 env / 共享信息文档)
+
+| 服务 | 地址 | 账号/密码 |
+|------|------|----------|
+| DeerFlow UI | http://10.131.102.145:2026 | admin@deerflow.com / adminADMIN |
+| MySQL | 10.131.102.145:3306 | root / CHANGE_ME_mysql |
+| PostgreSQL | 10.131.102.145:5433 | omop / CHANGE_ME_pg_omop |
+| SeaTunnel REST | http://10.131.102.145:8080 | 无认证 |
+| MinIO | 145:9000(S3) / 9001(Console) | minioadmin / CHANGE_ME_minio |
+| OpenMetadata (144) | http://10.131.102.144:8585 | admin@open-metadata.org / admin |
+| Airflow ingestion (144) | http://10.131.102.144:8081 | admin / admin |
+| Trino (144) | http://10.131.102.144:8080 | admin(无认证) |
+| Hive (144) | HS2 30000 / Metastore 30083 | 无认证 |
+| Doris FE (145) | :8030(Web) / :9030(MySQL) | root / 空密码 |
+| Spark Master (144) | http://10.131.102.144:32080 | 无认证 |
+| Flink JobManager (144) | http://10.131.102.144:32181 | 无认证 |
+| Hadoop NameNode UI/JMX (144) | http://10.131.102.144:30870 | 无认证 |
+| Hadoop YARN RM (144) | http://10.131.102.144:30888 | 无认证 |
+
 ## 附录五:Hadoop 接入(2026-09-10)
 
 **结论:Hadoop 3.3.6 集群(HDFS + YARN)经只读 MCP 接入 DeerFlow,
@@ -373,21 +493,3 @@ MCP 协议级端到端验证通过**(工具发现 + overview/queues/list_dir 实
 - `yarn_apps` 的 states 参数做了**白名单校验**(8 个合法状态值),
   防 URL 参数注入,非法值直接返回 ERROR 提示可选值
 
-## 附录四:凭证(内网测试环境,真实值见 145 容器 env / 共享信息文档)
-
-| 服务 | 地址 | 账号/密码 |
-|------|------|----------|
-| DeerFlow UI | http://10.131.102.145:2026 | admin@deerflow.com / adminADMIN |
-| MySQL | 10.131.102.145:3306 | root / CHANGE_ME_mysql |
-| PostgreSQL | 10.131.102.145:5433 | omop / CHANGE_ME_pg_omop |
-| SeaTunnel REST | http://10.131.102.145:8080 | 无认证 |
-| MinIO | 145:9000(S3) / 9001(Console) | minioadmin / CHANGE_ME_minio |
-| OpenMetadata (144) | http://10.131.102.144:8585 | admin@open-metadata.org / admin |
-| Airflow ingestion (144) | http://10.131.102.144:8081 | admin / admin |
-| Trino (144) | http://10.131.102.144:8080 | admin(无认证) |
-| Hive (144) | HS2 30000 / Metastore 30083 | 无认证 |
-| Doris FE (145) | :8030(Web) / :9030(MySQL) | root / 空密码 |
-| Spark Master (144) | http://10.131.102.144:32080 | 无认证 |
-| Flink JobManager (144) | http://10.131.102.144:32181 | 无认证 |
-| Hadoop NameNode UI/JMX (144) | http://10.131.102.144:30870 | 无认证 |
-| Hadoop YARN RM (144) | http://10.131.102.144:30888 | 无认证 |

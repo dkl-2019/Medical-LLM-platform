@@ -218,8 +218,7 @@ docker-compose.yml    12 个服务，端口 9101-9112
 
 | 文档 | 内容 |
 |------|------|
-| [deerflow-mcp/](deerflow-mcp/) | **自研 MCP 服务源码**（12 服务 72 工具）+ README：开发规范、新增 MCP 指南、同步模板、踩坑与运维手册 |
-| [deerflow-mcp-docker/](deerflow-mcp-docker/) | **MCP Docker 部署手册**：Dockerfile / docker-compose.yml / requirements + 构建流程、注册流程、运维速查 |
+| [deerflow-mcp/](deerflow-mcp/) | **自研 MCP 服务源码**（12 服务 72 工具）+ Docker 部署编排（Dockerfile/compose）+ README：部署模型、开发规范、新增 MCP 指南、同步模板、踩坑与运维手册 |
 | [144_145环境信息.md](144_145环境信息.md) | 服务器环境、账号、访问方式 |
 | [k8s-info/](k8s-info/) | 144 K8s 集群部署清单（Hadoop/Hive/Spark/Flink yaml 平铺 + 环境总览） |
 | [大模型数据治理平台-共享信息.md](大模型数据治理平台-共享信息.md) | 共享凭据（密码占位符的真实值见此） |
