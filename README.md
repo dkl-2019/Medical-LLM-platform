@@ -25,10 +25,10 @@ flowchart TB
     end
 
     subgraph DF["DeerFlow 2.0（145 · /data/deer-flow · :2026）"]
-        D["extensions_config.json 注册 9 个 MCP server<br/>langchain-mcp-adapters 接入 · 每新会话热加载"]
+        D["extensions_config.json 注册 11 个 MCP server<br/>langchain-mcp-adapters 接入 · 每新会话热加载"]
     end
 
-    subgraph MCP["自研 MCP 服务层（145 · /data/deerflow-mcp · 端口 9101-9109 · FastMCP streamable-http）"]
+    subgraph MCP["自研 MCP 服务层（145 · /data/deerflow-mcp · 端口 9101-9111 · FastMCP streamable-http）"]
         M1["mysql<br/>:9101"]
         M2["postgres<br/>:9102"]
         M3["seatunnel<br/>:9103"]
@@ -38,6 +38,8 @@ flowchart TB
         M7["hive<br/>:9107"]
         M8["doris<br/>:9108"]
         M9["dagster<br/>:9109"]
+        M10["spark<br/>:9110"]
+        M11["flink<br/>:9111"]
     end
 
     subgraph N145["数据组件（145 · medgov docker-compose）"]
@@ -55,10 +57,12 @@ flowchart TB
         HDFS["HDFS NameNode<br/>10.102.146.73:8020<br/>(ClusterIP)"]
         TRINO["Trino :8080<br/>(只读联邦查询)"]
         OM["OpenMetadata 1.13.1<br/>:8585"]
+        SPARK["Spark 3.5.4 Standalone<br/>Master REST :32080"]
+        FLINK["Flink 1.20 Session<br/>JobManager REST :32181"]
     end
 
     U --> D
-    D --> M1 & M2 & M3 & M4 & M5 & M6 & M7 & M8 & M9
+    D --> M1 & M2 & M3 & M4 & M5 & M6 & M7 & M8 & M9 & M10 & M11
 
     M1 --> MYSQL
     M2 --> PG
@@ -69,6 +73,8 @@ flowchart TB
     M7 --> HS2
     M8 --> DORIS
     M9 -- "GraphQL" --> DAG
+    M10 -- "Cluster REST" --> SPARK
+    M11 -- "REST" --> FLINK
 
     ST -- "原生 Hive connector<br/>HADOOP_USER_NAME=hadoop" --> MS
     ST --> HDFS
@@ -96,8 +102,8 @@ flowchart TB
 ### 4.1 代码位置与结构
 
 ```
-本地 Mac：/tmp/deerflow-mcp/          （开发）
-服务器：  /data/deerflow-mcp/         （145，docker compose 运行）
+本地 Mac：Medical-LLM-platform/deerflow-mcp/   （规范开发目录，与 145 同步）
+服务器：  /data/deerflow-mcp/                  （145，docker compose 运行）
 
 db_common.py          共享库：SQL 只读正则校验、结果截断(200行)、JSON 序列化
 db_mcp.py             通用 DB server：DB_TYPE 环境变量分派 mysql/pg/trino/hive 四种方言
@@ -105,8 +111,10 @@ seatunnel_mcp.py      SeaTunnel Zeta REST 封装（含密码占位符自动注�
 minio_mcp.py          MinIO S3 对象操作
 openmetadata_mcp.py   元数据检索 / 表详情 / 血缘查询
 dagster_mcp.py        GraphQL 封装：资产物化 / 作业启动 / 运行跟踪
+spark_mcp.py          Spark Standalone Cluster REST 封装（集群/应用管理）
+flink_mcp.py          Flink Session REST 封装（作业上传/提交/管理）
 Dockerfile            python:3.12-slim（离线环境用清华 pypi 源）
-docker-compose.yml    9 个服务，端口 9101-9109
+docker-compose.yml    11 个服务，端口 9101-9111
 ```
 
 - **框架**：Python `mcp` SDK 的 `FastMCP`，**必须锁 `mcp>=1.2.0,<2.0.0`**（2.0 移除了模块路径）
@@ -114,7 +122,7 @@ docker-compose.yml    9 个服务，端口 9101-9109
 - **注释规范**：代码注释 / docstring 一律中文，标识符保持英文
 - **踩坑**：带 `.format()`/f-string 的 docstring 不是字面量，`__doc__` 为空导致工具描述丢失 —— 必须显式赋 `fn.__doc__` 再 `mcp.tool()(fn)` 注册
 
-### 4.2 九个服务 × 工具清单
+### 4.2 十一个服务 × 工具清单
 
 | MCP (端口) | 目标组件 | 工具 | 说明 |
 |-----------|---------|------|------|
@@ -127,6 +135,8 @@ docker-compose.yml    9 个服务，端口 9101-9109
 | hive (9107) | HiveServer2 144:30000 | list_databases / list_tables / describe_table / read_query / execute_sql | impyla 驱动；库 default / omopdb / testdb |
 | doris (9108) | Doris FE 145:9030 | 同 mysql | 走 MySQL 协议 |
 | dagster (9109) | Dagster 145:3000 | dagster_overview / list_assets / list_runs / get_run_details / materialize_assets / launch_job / terminate_run / reload_workspace | GraphQL；资产物化经 `__ASSET_JOB` + `dagster/asset_selection` 标签 |
+| spark (9110) | Spark 3.5.4 · 144:32080 | spark_overview / list_workers / list_apps / get_app / submit_app / kill_app | Standalone Master Cluster REST；集群部署清单见 k8s-info/spark-k8s.yaml |
+| flink (9111) | Flink 1.20 · 144:32181 | flink_overview / list_jobs / get_job / list_uploaded_jars / upload_jar / run_uploaded_jar / cancel_job | Session JobManager REST；工作流 upload_jar → run_uploaded_jar；部署清单见 k8s-info/flink-k8s.yaml |
 
 ### 4.3 安全设计
 

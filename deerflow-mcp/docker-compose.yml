@@ -132,3 +132,25 @@ services:
     ports:
       - "9109:9109"
     restart: unless-stopped
+
+  mcp-spark:
+    build: .
+    container_name: deerflow-mcp-spark
+    command: ["python", "spark_mcp.py"]
+    environment:
+      PORT: "9110"
+      SPARK_MASTER_URL: http://10.131.102.144:32080
+    ports:
+      - "9110:9110"
+    restart: unless-stopped
+
+  mcp-flink:
+    build: .
+    container_name: deerflow-mcp-flink
+    command: ["python", "flink_mcp.py"]
+    environment:
+      PORT: "9111"
+      FLINK_REST_URL: http://10.131.102.144:32181
+    ports:
+      - "9111:9111"
+    restart: unless-stopped

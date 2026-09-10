@@ -4,7 +4,7 @@
 > 操作数据栈:数据库查询、数据同步、对象存储、元数据治理、任务编排。
 >
 > 服务器部署:10.131.102.145 `/data/deerflow-mcp`(本目录与之同步)
-> 开发记录:2026-08 至今 · 9 个 MCP 服务 · 50 个工具 · 端到端验证通过
+> 开发记录:2026-08 至今 · 11 个 MCP 服务 · 63 个工具 · 端到端验证通过
 
 ---
 
@@ -21,6 +21,8 @@
 | hive | 9107 | db_mcp.py (DB_TYPE=hive) | HiveServer2 · 144:30000 | 5 |
 | doris | 9108 | db_mcp.py (DB_TYPE=mysql) | Doris FE · 145:9030(MySQL 协议) | 5 |
 | dagster | 9109 | dagster_mcp.py | Dagster 1.13.12 · 145:3000(GraphQL) | 8 |
+| spark | 9110 | spark_mcp.py | Spark 3.5.4 Standalone · 144:32080 | 6 |
+| flink | 9111 | flink_mcp.py | Flink 1.20 Session · 144:32181 | 7 |
 
 ```
 用户对话
@@ -30,7 +32,8 @@
        ├─ postgres :9102 ─> PG      ├─ trino  :9106 ─> Trino (144)
        ├─ seatunnel :9103 ─> 同步   ├─ hive   :9107 ─> HiveServer2 (144)
        ├─ minio :9104 ─> S3         ├─ doris  :9108 ─> Doris FE
-       └─ dagster :9109 ─> 编排调度
+       ├─ dagster :9109 ─> 编排调度  ├─ spark  :9110 ─> Spark Master (144)
+       └─ flink :9111 ─> Flink JobManager (144)
 ```
 
 ## 2. 代码结构
@@ -42,9 +45,11 @@ seatunnel_mcp.py      SeaTunnel Zeta REST 封装(密码占位符自动注入 + H
 minio_mcp.py          MinIO S3 对象操作
 openmetadata_mcp.py   元数据检索/表详情/血缘(REST + JWT,密码 base64 登录)
 dagster_mcp.py        Dagster GraphQL:资产物化/作业启动/运行跟踪
+spark_mcp.py          Spark Standalone Cluster REST:集群状态/应用提交与终止
+flink_mcp.py          Flink Session REST:作业上传/提交/取消
 requirements.txt      mcp>=1.2.0,<2.0.0(必须锁!)、httpx、pymysql、psycopg[binary] 等
 Dockerfile            python:3.12-slim(离线环境走清华 pypi)
-docker-compose.yml    9 个服务,端口 9101-9109
+docker-compose.yml    11 个服务,端口 9101-9111
 README.md             本文件
 ```
 
@@ -307,7 +312,36 @@ Dagster 1.13 GraphQL 要点:
   executionMetadata: {tags: [{key: "dagster/asset_selection", value: "[\"资产名\"]"}]}})`
 - jobName 是 `__ASSET_JOB`(单下划线),写成 `__ASSET_JOB__` 报 PipelineNotFound
 
-## 附录三:凭证(内网测试环境,真实值见 145 容器 env / 共享信息文档)
+## 附录三:Spark / Flink 接入(2026-09-10)
+
+**结论:Spark 3.5.4 Standalone 与 Flink 1.20.5 Session 均经 MCP 接入 DeerFlow,
+MCP 协议级端到端验证通过**(工具发现 + overview 实调返回集群数据)。
+
+### Spark(spark_mcp.py,端口 9110)
+
+- Master Cluster REST:`http://10.131.102.144:32080`(K8s NodePort,无鉴权)
+- 6 个工具:spark_overview / list_workers / list_apps / get_app / submit_app / kill_app
+- 提交走 `POST /json/submit-app/`(multipart form:appResource + mainClass + appArgs[i]),
+  **jar_path 必须是集群可访问的 URL**(http/hdfs),MCP 不上传文件
+- 终止:`POST /json/kill/{appId}/{driverId}`
+
+### Flink(flink_mcp.py,端口 9111)
+
+- JobManager REST:`http://10.131.102.144:32181`(NodePort,无鉴权),版本 1.20.5
+- 7 个工具:flink_overview / list_jobs / get_job / list_uploaded_jars / upload_jar /
+  run_uploaded_jar / cancel_job
+- 作业工作流:**upload_jar(容器内路径)→ run_uploaded_jar(jarId + entryClass)**
+- 取消用 `PATCH /jobs/{id}?mode=cancel`(注意是 PATCH,不是 POST)
+
+### 注意事项
+
+- 145 上没有本地 spark/flink 客户端,全部走 REST,无需在 MCP 容器装任何客户端
+- Flink upload_jar 的 jar_path 是 **MCP 容器内**的绝对路径——上传宿主机 jar 需先
+  拷进容器或挂载目录(后续如常用,可考虑给容器挂 /data/jars 卷)
+- Spark submit_app 的 jar 是**拉取式**(Master/Worker 自己去拉),放 HDFS 或
+  MinIO presigned URL 均可
+
+## 附录四:凭证(内网测试环境,真实值见 145 容器 env / 共享信息文档)
 
 | 服务 | 地址 | 账号/密码 |
 |------|------|----------|
@@ -321,3 +355,5 @@ Dagster 1.13 GraphQL 要点:
 | Trino (144) | http://10.131.102.144:8080 | admin(无认证) |
 | Hive (144) | HS2 30000 / Metastore 30083 | 无认证 |
 | Doris FE (145) | :8030(Web) / :9030(MySQL) | root / 空密码 |
+| Spark Master (144) | http://10.131.102.144:32080 | 无认证 |
+| Flink JobManager (144) | http://10.131.102.144:32181 | 无认证 |
