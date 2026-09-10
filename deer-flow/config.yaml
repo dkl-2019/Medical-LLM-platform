@@ -10,7 +10,7 @@ models:
     use: langchain_openai:ChatOpenAI
     model: Qwen3-80B-A3B
     base_url: http://10.131.102.25:9000/v1
-    api_key: "EMPTY"
+    api_key: $QWEN_API_KEY
     request_timeout: 600.0
     max_retries: 2
     max_tokens: 4096
