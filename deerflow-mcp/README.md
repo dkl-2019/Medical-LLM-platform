@@ -4,7 +4,7 @@
 > 操作数据栈:数据库查询、数据同步、对象存储、元数据治理、任务编排。
 >
 > 服务器部署:10.131.102.145 `/data/deerflow-mcp`(本目录与之同步)
-> 开发记录:2026-08 至今 · 11 个 MCP 服务 · 63 个工具 · 端到端验证通过
+> 开发记录:2026-08 至今 · 12 个 MCP 服务 · 72 个工具 · 端到端验证通过
 
 ---
 
@@ -23,6 +23,7 @@
 | dagster | 9109 | dagster_mcp.py | Dagster 1.13.12 · 145:3000(GraphQL) | 8 |
 | spark | 9110 | spark_mcp.py | Spark 3.5.4 Standalone · 144:32080 | 6 |
 | flink | 9111 | flink_mcp.py | Flink 1.20 Session · 144:32181 | 7 |
+| hadoop | 9112 | hadoop_mcp.py | Hadoop 3.3.6 · 144 NN :30870 / RM :30888(**只读**) | 9 |
 
 ```
 用户对话
@@ -34,6 +35,7 @@
        ├─ minio :9104 ─> S3         ├─ doris  :9108 ─> Doris FE
        ├─ dagster :9109 ─> 编排调度  ├─ spark  :9110 ─> Spark Master (144)
        └─ flink :9111 ─> Flink JobManager (144)
+       └─ hadoop :9112 ─> NameNode JMX / WebHDFS / YARN RM (144)
 ```
 
 ## 2. 代码结构
@@ -47,9 +49,10 @@ openmetadata_mcp.py   元数据检索/表详情/血缘(REST + JWT,密码 base64 
 dagster_mcp.py        Dagster GraphQL:资产物化/作业启动/运行跟踪
 spark_mcp.py          Spark Standalone Cluster REST:集群状态/应用提交与终止
 flink_mcp.py          Flink Session REST:作业上传/提交/取消
+hadoop_mcp.py         Hadoop 集群只读监控:JMX + WebHDFS + YARN REST
 requirements.txt      mcp>=1.2.0,<2.0.0(必须锁!)、httpx、pymysql、psycopg[binary] 等
 Dockerfile            python:3.12-slim(离线环境走清华 pypi)
-docker-compose.yml    11 个服务,端口 9101-9111
+docker-compose.yml    12 个服务,端口 9101-9112
 README.md             本文件
 ```
 
@@ -341,6 +344,35 @@ MCP 协议级端到端验证通过**(工具发现 + overview 实调返回集群�
 - Spark submit_app 的 jar 是**拉取式**(Master/Worker 自己去拉),放 HDFS 或
   MinIO presigned URL 均可
 
+## 附录五:Hadoop 接入(2026-09-10)
+
+**结论:Hadoop 3.3.6 集群(HDFS + YARN)经只读 MCP 接入 DeerFlow,
+MCP 协议级端到端验证通过**(工具发现 + overview/queues/list_dir 实调返回真实集群数据)。
+
+### hadoop_mcp.py(端口 9112)
+
+封装 144 集群的三个 REST 入口,环境变量 `HADOOP_NN_URL` / `YARN_RM_URL`:
+
+| 入口 | 地址 | 用途 |
+|------|------|------|
+| NameNode JMX | http://10.131.102.144:30870/jmx | HDFS 容量/DataNode 存活/块健康度 |
+| WebHDFS REST | http://10.131.102.144:30870/webhdfs/v1 | 目录浏览(LISTSTATUS)、目录大小(GETCONTENTSUMMARY) |
+| YARN RM REST | http://10.131.102.144:30888/ws/v1/cluster | 集群指标/节点/队列(CapacityScheduler)/应用列表 |
+
+- 9 个工具:hadoop_overview / hdfs_status / hdfs_list_dir / hdfs_dir_size /
+  yarn_cluster / yarn_nodes / yarn_queues / yarn_apps / yarn_queue_apps
+- **设计为纯只读**:不提供任何 HDFS 写/删操作(写数据走 SeaTunnel 等专业通道)
+- MapReduce 运行情况:`yarn_apps(states="RUNNING", app_type="MAPREDUCE")`
+  —— MR JobHistory(19888)未在 K8s 暴露 NodePort,MR 作业统一从 YARN apps 查
+
+### 踩坑
+
+- YARN scheduler 返回结构是**嵌套对象** `schedulerInfo.queues.queue[]`,
+  不是直接的数组,队列还可能继续嵌套 `queues.queue`(代码里递归解析)
+- YARN `/cluster/apps` 无结果时返回 `"apps": {}`(**空 dict**)而非空数组,必须兼容
+- `yarn_apps` 的 states 参数做了**白名单校验**(8 个合法状态值),
+  防 URL 参数注入,非法值直接返回 ERROR 提示可选值
+
 ## 附录四:凭证(内网测试环境,真实值见 145 容器 env / 共享信息文档)
 
 | 服务 | 地址 | 账号/密码 |
@@ -357,3 +389,5 @@ MCP 协议级端到端验证通过**(工具发现 + overview 实调返回集群�
 | Doris FE (145) | :8030(Web) / :9030(MySQL) | root / 空密码 |
 | Spark Master (144) | http://10.131.102.144:32080 | 无认证 |
 | Flink JobManager (144) | http://10.131.102.144:32181 | 无认证 |
+| Hadoop NameNode UI/JMX (144) | http://10.131.102.144:30870 | 无认证 |
+| Hadoop YARN RM (144) | http://10.131.102.144:30888 | 无认证 |

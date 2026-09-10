@@ -4,13 +4,13 @@
 > 用自然语言对话驱动底层数据组件，实现医疗数据（OMOP CDM）的同步、加工、查询、治理与编排。
 >
 > 环境：离线内网 10.131.102.144 / 10.131.102.145，Docker + K8s 混合部署。
-> 最近更新：2026-09-03
+> 最近更新：2026-09-10
 
 ---
 
 ## 1. 一句话架构
 
-**用户一句话 → DeerFlow Agent 编排 → 9 个自研 MCP 工具服务（streamable-http）→ 数据同步（SeaTunnel）/ 存储（MySQL·PG·Hive·Doris·MinIO）/ 查询（Trino）/ 编排（Dagster）/ 治理（OpenMetadata）**
+**用户一句话 → DeerFlow Agent 编排 → 12 个自研 MCP 工具服务（streamable-http）→ 数据同步（SeaTunnel）/ 存储（MySQL·PG·Hive·Doris·MinIO）/ 查询（Trino）/ 编排（Dagster）/ 治理（OpenMetadata）/ 计算（Spark·Flink）/ 集群监控（Hadoop）**
 
 端到端已验证的代表性场景：对话发起「把 MySQL his_demo 的表同步到 Hive」→ Agent 查源表结构 → 建目标 Hive 表 → 提交 SeaTunnel 作业 → 校验数据落库，全程无需人工写 SQL 或脚本。
 
@@ -25,10 +25,10 @@ flowchart TB
     end
 
     subgraph DF["DeerFlow 2.0（145 · /data/deer-flow · :2026）"]
-        D["extensions_config.json 注册 11 个 MCP server<br/>langchain-mcp-adapters 接入 · 每新会话热加载"]
+        D["extensions_config.json 注册 12 个 MCP server<br/>langchain-mcp-adapters 接入 · 每新会话热加载"]
     end
 
-    subgraph MCP["自研 MCP 服务层（145 · /data/deerflow-mcp · 端口 9101-9111 · FastMCP streamable-http）"]
+    subgraph MCP["自研 MCP 服务层（145 · /data/deerflow-mcp · 端口 9101-9112 · FastMCP streamable-http）"]
         M1["mysql<br/>:9101"]
         M2["postgres<br/>:9102"]
         M3["seatunnel<br/>:9103"]
@@ -40,6 +40,7 @@ flowchart TB
         M9["dagster<br/>:9109"]
         M10["spark<br/>:9110"]
         M11["flink<br/>:9111"]
+        M12["hadoop<br/>:9112"]
     end
 
     subgraph N145["数据组件（145 · medgov docker-compose）"]
@@ -55,6 +56,8 @@ flowchart TB
         HS2["HiveServer2<br/>:30000"]
         MS["Hive Metastore<br/>thrift :30083"]
         HDFS["HDFS NameNode<br/>10.102.146.73:8020<br/>(ClusterIP)"]
+        YARNRM["YARN RM<br/>:30888 (NodePort)"]
+        NNU["NameNode UI/JMX<br/>:30870 (NodePort)"]
         TRINO["Trino :8080<br/>(只读联邦查询)"]
         OM["OpenMetadata 1.13.1<br/>:8585"]
         SPARK["Spark 3.5.4 Standalone<br/>Master REST :32080"]
@@ -62,7 +65,7 @@ flowchart TB
     end
 
     U --> D
-    D --> M1 & M2 & M3 & M4 & M5 & M6 & M7 & M8 & M9 & M10 & M11
+    D --> M1 & M2 & M3 & M4 & M5 & M6 & M7 & M8 & M9 & M10 & M11 & M12
 
     M1 --> MYSQL
     M2 --> PG
@@ -75,6 +78,9 @@ flowchart TB
     M9 -- "GraphQL" --> DAG
     M10 -- "Cluster REST" --> SPARK
     M11 -- "REST" --> FLINK
+    M12 -- "JMX/WebHDFS" --> NNU
+    M12 -- "REST" --> YARNRM
+    YARNRM --> HDFS
 
     ST -- "原生 Hive connector<br/>HADOOP_USER_NAME=hadoop" --> MS
     ST --> HDFS
@@ -113,8 +119,9 @@ openmetadata_mcp.py   元数据检索 / 表详情 / 血缘查询
 dagster_mcp.py        GraphQL 封装：资产物化 / 作业启动 / 运行跟踪
 spark_mcp.py          Spark Standalone Cluster REST 封装（集群/应用管理）
 flink_mcp.py          Flink Session REST 封装（作业上传/提交/管理）
+hadoop_mcp.py         Hadoop 集群只读监控（JMX + WebHDFS + YARN REST）
 Dockerfile            python:3.12-slim（离线环境用清华 pypi 源）
-docker-compose.yml    11 个服务，端口 9101-9111
+docker-compose.yml    12 个服务，端口 9101-9112
 ```
 
 - **框架**：Python `mcp` SDK 的 `FastMCP`，**必须锁 `mcp>=1.2.0,<2.0.0`**（2.0 移除了模块路径）
@@ -122,7 +129,7 @@ docker-compose.yml    11 个服务，端口 9101-9111
 - **注释规范**：代码注释 / docstring 一律中文，标识符保持英文
 - **踩坑**：带 `.format()`/f-string 的 docstring 不是字面量，`__doc__` 为空导致工具描述丢失 —— 必须显式赋 `fn.__doc__` 再 `mcp.tool()(fn)` 注册
 
-### 4.2 十一个服务 × 工具清单
+### 4.2 十二个服务 × 工具清单
 
 | MCP (端口) | 目标组件 | 工具 | 说明 |
 |-----------|---------|------|------|
@@ -137,6 +144,7 @@ docker-compose.yml    11 个服务，端口 9101-9111
 | dagster (9109) | Dagster 145:3000 | dagster_overview / list_assets / list_runs / get_run_details / materialize_assets / launch_job / terminate_run / reload_workspace | GraphQL；资产物化经 `__ASSET_JOB` + `dagster/asset_selection` 标签 |
 | spark (9110) | Spark 3.5.4 · 144:32080 | spark_overview / list_workers / list_apps / get_app / submit_app / kill_app | Standalone Master Cluster REST；集群部署清单见 k8s-info/spark-k8s.yaml |
 | flink (9111) | Flink 1.20 · 144:32181 | flink_overview / list_jobs / get_job / list_uploaded_jars / upload_jar / run_uploaded_jar / cancel_job | Session JobManager REST；工作流 upload_jar → run_uploaded_jar；部署清单见 k8s-info/flink-k8s.yaml |
+| hadoop (9112) | Hadoop 3.3.6 · 144 NN :30870 / RM :30888 | hadoop_overview / hdfs_status / hdfs_list_dir / hdfs_dir_size / yarn_cluster / yarn_nodes / yarn_queues / yarn_apps / yarn_queue_apps | **只读**；NameNode JMX + WebHDFS + YARN RM REST；MR 作业情况经 yarn_apps(app_type=MAPREDUCE) |
 
 ### 4.3 安全设计
 
@@ -210,7 +218,8 @@ docker-compose.yml    11 个服务，端口 9101-9111
 
 | 文档 | 内容 |
 |------|------|
-| [deerflow-mcp/](deerflow-mcp/) | **自研 MCP 服务源码**（9 服务 50 工具）+ README：开发规范、新增 MCP 指南、同步模板、踩坑与运维手册 |
+| [deerflow-mcp/](deerflow-mcp/) | **自研 MCP 服务源码**（12 服务 72 工具）+ README：开发规范、新增 MCP 指南、同步模板、踩坑与运维手册 |
+| [deerflow-mcp-docker/](deerflow-mcp-docker/) | **MCP Docker 部署手册**：Dockerfile / docker-compose.yml / requirements + 构建流程、注册流程、运维速查 |
 | [144_145环境信息.md](144_145环境信息.md) | 服务器环境、账号、访问方式 |
 | [k8s-info/](k8s-info/) | 144 K8s 集群部署清单（Hadoop/Hive/Spark/Flink yaml 平铺 + 环境总览） |
 | [大模型数据治理平台-共享信息.md](大模型数据治理平台-共享信息.md) | 共享凭据（密码占位符的真实值见此） |
